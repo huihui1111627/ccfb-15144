@@ -16,3 +16,12 @@ node_modules/
 __pycache__/
 .venv/
 venv/
+
+# Go
+/sdwan
+*.test
+*.prof
+
+# 仿真产物
+/output/
+output/

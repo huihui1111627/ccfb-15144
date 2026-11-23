@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SD-WAN 仿真控制台</title>
+<style>
+:root {
+  --bg: #0f141b; --panel: #171f2a; --panel2: #1e2937; --line: #2a384a;
+  --txt: #dbe4ef; --dim: #8296ab; --good: #2ecc71; --warn: #f39c12;
+  --bad: #e74c3c; --accent: #3498db; --mpls: #9b59b6; --bb: #1abc9c; --cell: #e67e22;
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--txt);
+  font:13px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+header { display:flex; align-items:center; gap:18px; padding:12px 20px;
+  background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+h1 { font-size:16px; margin:0; }
+.clock { color:var(--accent); font-variant-numeric:tabular-nums; }
+select, button { background:var(--panel2); color:var(--txt); border:1px solid var(--line);
+  border-radius:6px; padding:6px 10px; font-size:12px; cursor:pointer; }
+button:hover { border-color:var(--accent); }
+button.danger { color:#ffb4ab; }
+button.good { color:#a7f3d0; }
+main { padding:18px 20px; display:grid; gap:16px;
+  grid-template-columns: 1fr 1fr; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+.panel h2 { font-size:13px; margin:0 0 10px; color:var(--dim);
+  text-transform:uppercase; letter-spacing:.08em; }
+.full { grid-column:1 / -1; }
+.links { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
+.link-card { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px; }
+.link-card h3 { margin:0 0 8px; font-size:13px; display:flex; justify-content:space-between; }
+.dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
+.dot.good{background:var(--good)} .dot.warn{background:var(--warn)} .dot.bad{background:var(--bad)}
+.metric { display:flex; justify-content:space-between; padding:2px 0;
+  font-variant-numeric:tabular-nums; }
+.metric .k { color:var(--dim); }
+.bar { height:6px; background:var(--line); border-radius:3px; margin-top:4px; overflow:hidden; }
+.bar > i { display:block; height:100%; background:var(--accent); transition:width .4s; }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+th { color:var(--dim); font-weight:500; }
+td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
+.badge { padding:1px 7px; border-radius:10px; font-size:11px; white-space:nowrap; }
+.b-mpls{background:rgba(155,89,182,.25);color:#d7b3f0}
+.b-broadband{background:rgba(26,188,156,.22);color:#87e8d3}
+.b-cellular{background:rgba(230,126,34,.22);color:#f6c089}
+.b-replica{background:rgba(52,152,219,.22);color:#9ecff0;margin-left:4px}
+.b-app{background:var(--panel2); border:1px solid var(--line); }
+.why { color:var(--dim); font-size:11px; }
+#events { max-height:280px; overflow:auto; font-size:12px; }
+.ev { padding:5px 8px; border-bottom:1px solid var(--line); display:flex; gap:10px; }
+.ev time { color:var(--dim); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.ev .r-migrate { color:var(--warn); }
+.ev .r-admit { color:var(--accent); }
+.ev .r-dual { color:#d7b3f0; }
+.ev .r-end { color:var(--dim); }
+.pill { font-size:11px; color:var(--dim); }
+.faults { display:flex; gap:8px; flex-wrap:wrap; }
+.faults .sep { width:1px; background:var(--line); margin:0 4px; }
+.legend{color:var(--dim);font-size:11px;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌐 SD-WAN 边缘仿真控制台</h1>
+  <span class="clock" id="clock">--:--:--</span>
+  <select id="store"></select>
+  <div class="faults">
+    <button class="danger" onclick="fault('mpls','degrade',0.2)">专线拥塞(20%)</button>
+    <button class="good" onclick="fault('mpls','restore-cap')">专线恢复</button>
+    <span class="sep"></span>
+    <button class="danger" onclick="fault('broadband','outage')">宽带中断</button>
+    <button class="good" onclick="fault('broadband','restore')">宽带恢复</button>
+    <button class="danger" onclick="fault('broadband','degrade',0.3)">宽带劣化(30%)</button>
+    <button class="good" onclick="fault('broadband','restore-cap')">带宽恢复</button>
+    <span class="sep"></span>
+    <button class="danger" onclick="fault('cellular','outage')">移动网中断</button>
+    <button class="good" onclick="fault('cellular','restore')">移动网恢复</button>
+  </div>
+  <span class="pill">操作作用于当前选中门店（每虚拟秒=1 真实秒）</span>
+</header>
+
+<main>
+  <section class="panel full">
+    <h2>各链路实时质量（探测包实测 RTT / 丢包 / 抖动）</h2>
+    <div class="links" id="links"></div>
+  </section>
+
+  <section class="panel">
+    <h2>应用流量在链路上的分布（bps）</h2>
+    <table id="dist"><thead><tr>
+      <th>应用</th><th class="num">专线</th><th class="num">宽带</th>
+      <th class="num">移动网</th><th class="num">合计</th></tr></thead><tbody></tbody></table>
+    <div class="legend">大流量（备份/更新）被限速并约束在便宜链路；关键应用质量全面不达标时双链路复制。</div>
+  </section>
+
+  <section class="panel">
+    <h2>接收端包统计（去重 / 乱序 / 丢失）</h2>
+    <table id="pstats"><thead><tr>
+      <th>链路</th><th class="num">送达</th><th class="num">重复副本丢弃</th>
+      <th class="num">迁移乱序</th><th class="num">丢失</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section class="panel full">
+    <h2>当前流（识别依据与选路结果，结果缓存至流结束）</h2>
+    <table id="flows"><thead><tr>
+      <th>流</th><th>识别应用</th><th>识别依据</th><th>主链路</th><th>复制</th><th>状态</th>
+      </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section class="panel full">
+    <h2>流迁移与选路事件（含滞回迁移、复制启停、识别升级）</h2>
+    <div id="events"></div>
+  </section>
+</main>
+
+<script>
+const APP_CN = {pos:"收银 POS", vc:"视频会议", bulk:"备份/更新", web:"办公网页", general:"未识别/通用"};
+const LINK_CN = {mpls:"专线", broadband:"宽带", cellular:"移动网"};
+let currentStore = "";
+
+async function getJSON(u){ const r = await fetch(u); return r.json(); }
+async function postJSON(u,b){ await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}); }
+
+function qClass(q){
+  if(!q.healthy) return "bad";
+  if(q.loss > 0.05 || q.rtt > 300 || q.jitter > 80) return "bad";
+  if(q.loss > 0.02 || q.rtt > 150 || q.util > 0.85) return "warn";
+  return "good";
+}
+function pct(x){ return (x*100).toFixed(2)+"%"; }
+function bps(x){ if(!x) return "0"; const u=["bps","Kbps","Mbps","Gbps"]; let i=0;
+  while(x>=1000&&i<3){x/=1000;i++;} return x.toFixed(1)+" "+u[i]; }
+
+async function loadStores(){
+  const stores = await getJSON("/api/stores");
+  const sel = document.getElementById("store");
+  if(!currentStore) currentStore = stores[0].id;
+  sel.innerHTML = stores.map(s =>
+    `<option value="${s.id}" ${s.id===currentStore?"selected":""}>${s.id}（区域${s.region}${s.has_cell?" · 含移动网卡":""}）</option>`).join("");
+  sel.onchange = () => { currentStore = sel.value; refresh(); };
+}
+
+async function refresh(){
+  if(!currentStore) await loadStores();
+  const [v, now] = await Promise.all([
+    getJSON("/api/store?id="+currentStore), getJSON("/api/now")]);
+  document.getElementById("clock").textContent = "仿真时间 " + now.now.replace("T"," ").slice(0,19)+" UTC";
+  renderLinks(v); renderDist(v); renderStats(v); renderFlows(v); renderEvents(v.events);
+}
+
+function renderLinks(v){
+  const order = ["mpls","broadband","cellular"];
+  document.getElementById("links").innerHTML = order.filter(t => v.links[t]).map(t => {
+    const q = v.links[t].quality, c = qClass(q);
+    const util = Math.min(1, q.util||0);
+    return `<div class="link-card">
+      <h3><span><i class="dot ${c}"></i>${LINK_CN[t]}</span>
+        <span style="color:var(--dim)">${q.healthy?"正常":"不可用"}</span></h3>
+      <div class="metric"><span class="k">RTT</span><span>${q.rtt.toFixed(1)} ms</span></div>
+      <div class="metric"><span class="k">丢包率</span><span>${pct(q.loss)}</span></div>
+      <div class="metric"><span class="k">抖动</span><span>${q.jitter.toFixed(1)} ms</span></div>
+      <div class="metric"><span class="k">上行容量</span><span>${bps(q.up_bps)}</span></div>
+      <div class="metric"><span class="k">利用率</span><span>${pct(util)}</span></div>
+      <div class="bar"><i style="width:${util*100}%;background:var(--${t==="mpls"?"mpls":t==="broadband"?"bb":"cell"})"></i></div>
+      <div class="metric"><span class="k">累计上行</span><span>${bps(v.links[t].bytes_up*8)}</span></div>
+      ${v.links[t].cost>0?`<div class="metric"><span class="k">移动费用</span><span>¥${v.links[t].cost.toFixed(2)}</span></div>`:""}
+    </div>`;
+  }).join("");
+}
+
+function renderDist(v){
+  const apps = ["pos","vc","bulk","web","general"], links=["mpls","broadband","cellular"];
+  const tb = document.querySelector("#dist tbody");
+  tb.innerHTML = apps.map(a => {
+    let total=0; const cells = links.map(t => {
+      const x = (v.app_dist_bps[t] && v.app_dist_bps[t][a]) || 0; total += x;
+      return `<td class="num">${x?bps(x):"—"}</td>`; }).join("");
+    return `<tr><td><span class="badge b-app">${APP_CN[a]}</span></td>${cells}
+      <td class="num">${bps(total)}</td></tr>`;
+  }).join("");
+}
+
+function renderStats(v){
+  const tb = document.querySelector("#pstats tbody");
+  tb.innerHTML = Object.entries(v.packet_stats).map(([t,s]) =>
+    `<tr><td><span class="badge b-${t}">${LINK_CN[t]}</span></td>
+     <td class="num">${s.delivered}</td><td class="num">${s.duplicates}</td>
+     <td class="num">${s.reordered}</td><td class="num">${s.lost}</td></tr>`).join("");
+}
+
+function renderFlows(v){
+  const tb = document.querySelector("#flows tbody");
+  const rows = v.flows.slice().sort((a,b) => a.app.localeCompare(b.app));
+  tb.innerHTML = rows.map(f => `<tr>
+    <td class="why">${f.key.proto} ${f.key.src.ip}→${f.key.dst.ip}:${f.key.dst.port}</td>
+    <td><span class="badge b-app">${APP_CN[f.app]||f.app}</span></td>
+    <td class="why">${f.class_why}</td>
+    <td><span class="badge b-${f.primary}">${LINK_CN[f.primary]}</span></td>
+    <td>${f.replica?`<span class="badge b-replica">复制→${LINK_CN[f.replica]}</span>`:"—"}</td>
+    <td class="why">${f.replica?"双链路复制发送中":"单链路转发"}</td></tr>`).join("")
+    || `<tr><td colspan="6" class="why">暂无活动流</td></tr>`;
+}
+
+function reasonClass(r){
+  if(r.startsWith("migrate")) return "r-migrate";
+  if(r.includes("replication")||r.startsWith("dual")) return "r-dual";
+  if(r.startsWith("flow-end")) return "r-end";
+  return "r-admit";
+}
+function renderEvents(evs){
+  const box = document.getElementById("events");
+  box.innerHTML = evs.slice().reverse().map(e => {
+    const t = e.at.slice(11,19);
+    const fromTo = e.from ? `${LINK_CN[e.from]||e.from} → ` : "";
+    const target = e.to ? fromTo + (LINK_CN[e.to]||e.to) : "—";
+    return `<div class="ev"><time>${t}</time>
+      <span class="badge b-app">${APP_CN[e.app]||e.app}</span>
+      <span class="why">${e.edge_id}</span>
+      <span class="${reasonClass(e.reason)}"><b>${target}</b> · ${e.reason}</span></div>`;
+  }).join("") || `<div class="why">暂无事件</div>`;
+}
+
+async function fault(link, action, mult){
+  await postJSON("/api/fault", {store_id: currentStore, link, action, mult: mult||0.25});
+}
+
+loadStores().then(refresh);
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>
